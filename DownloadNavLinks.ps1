@@ -10,10 +10,6 @@ if (!(Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" -Forc
 Write-Host "Connecting to Admin Service..." -ForegroundColor Cyan
 $adminConn = Connect-PnPOnline -Url "https://wkx8x-admin.sharepoint.com" -UseWebLogin -ReturnConnection
 
-# Set your email manually here if the auto-detection failed previously
-$myUserEmail = "admin@wkx8x.onmicrosoft.com" 
-Write-Host "Elevating permissions as: $myUserEmail" -ForegroundColor Gray
-
 # 2. Get ALL Sites
 $sites = Get-PnPTenantSite -Connection $adminConn
 Write-Host "Total sites found: $($sites.Count)" -ForegroundColor Cyan
@@ -21,16 +17,14 @@ Write-Host "Total sites found: $($sites.Count)" -ForegroundColor Cyan
 foreach ($site in $sites) {
     Write-Host "`n--- Processing: $($site.Url) ---" -ForegroundColor Yellow
     
-    # ELEVATION
-    Set-PnPTenantSite -Url $site.Url -Owners $myUserEmail -Connection $adminConn -ErrorAction SilentlyContinue
-
-    # Connect to the specific site
+    # Connect to the specific site (Using existing permissions)
     $siteConn = Connect-PnPOnline -Url $site.Url -UseWebLogin -ReturnConnection
     
     $locations = @("QuickLaunch", "TopNavigationBar", "HubWebRelative")
     
     foreach ($location in $locations) {
         try {
+            # This will fail/skip if you are not an Admin on this specific site
             $nodes = Get-PnPNavigationNode -Location $location -Connection $siteConn -ErrorAction Stop
             if ($null -eq $nodes) { continue }
 
@@ -68,7 +62,9 @@ foreach ($site in $sites) {
                     }
                 }
             }
-        } catch { }
+        } catch { 
+            Write-Host "  - Access denied or menu empty for $location" -ForegroundColor Gray
+        }
     }
 }
 
@@ -79,7 +75,7 @@ if ($results.Count -gt 0) {
     Write-Host "File saved to: $exportPath" -ForegroundColor Green
     Invoke-Item "C:\Temp"
 } else {
-    Write-Warning "No unique links were found."
+    Write-Warning "No unique links were found. Ensure you have permissions on the sites."
 }
 
 Disconnect-PnPOnline -Connection $adminConn
