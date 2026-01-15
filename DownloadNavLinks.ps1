@@ -2,36 +2,44 @@
 $timestamp = Get-Date -Format "yyyyMMdd_HHmm"
 $exportPath = "C:\Temp\SharePointNavigationReport_$($timestamp).csv"
 $results = @()
-$seenLinks = @{} # Used to track and prevent duplicates
+$seenLinks = @{} 
 
 if (!(Test-Path "C:\Temp")) { New-Item -ItemType Directory -Path "C:\Temp" -Force }
 
-# 1. Connect to Admin Service
-Write-Host "Connecting to Admin Service..." -ForegroundColor Cyan
-$adminConn = Connect-PnPOnline -Url "https://wkx8x-admin.sharepoint.com" -UseWebLogin -ReturnConnection
+# 1. Reset Session completely
+Disconnect-PnPOnline -ErrorAction SilentlyContinue
 
-# 2. Get ALL Sites
+# 2. Connect to Admin Service
+# We use -UseWebLogin to support MFA. 
+Write-Host "Please log in via the browser window..." -ForegroundColor Cyan
+try {
+    # If your PnP version supports it, -ClearTokenCache is best here.
+    # If it throws an error, I will provide a version without it.
+    $adminConn = Connect-PnPOnline -Url "https://wkx8x-admin.sharepoint.com" -UseWebLogin -ReturnConnection
+} catch {
+    Write-Error "Failed to connect to Admin service."
+    return
+}
+
+# 3. Get ALL Sites
 $sites = Get-PnPTenantSite -Connection $adminConn
 Write-Host "Total sites found: $($sites.Count)" -ForegroundColor Cyan
 
 foreach ($site in $sites) {
     Write-Host "`n--- Processing: $($site.Url) ---" -ForegroundColor Yellow
     
-    # Connect to the specific site (Using existing permissions)
+    # We reuse the web session so you only log in ONCE for the whole tenant
     $siteConn = Connect-PnPOnline -Url $site.Url -UseWebLogin -ReturnConnection
     
     $locations = @("QuickLaunch", "TopNavigationBar", "HubWebRelative")
     
     foreach ($location in $locations) {
         try {
-            # This will fail/skip if you are not an Admin on this specific site
             $nodes = Get-PnPNavigationNode -Location $location -Connection $siteConn -ErrorAction Stop
             if ($null -eq $nodes) { continue }
 
             foreach ($node in $nodes) {
-                # Create a unique key based on Site, Title, and URL
                 $key = "$($site.Url)_$($node.Title)_$($node.Url)"
-                
                 if (-not $seenLinks.ContainsKey($key)) {
                     $results += [PSCustomObject]@{
                         SiteUrl    = $site.Url
@@ -44,11 +52,9 @@ foreach ($site in $sites) {
                     $seenLinks[$key] = $true
                 }
                 
-                # Check for Children
                 $children = Get-PnPNavigationNode -Id $node.Id -Connection $siteConn -ErrorAction SilentlyContinue
                 foreach ($child in $children) {
                     $childKey = "$($site.Url)_$($child.Title)_$($child.Url)"
-                    
                     if (-not $seenLinks.ContainsKey($childKey)) {
                         $results += [PSCustomObject]@{
                             SiteUrl    = $site.Url
@@ -62,20 +68,15 @@ foreach ($site in $sites) {
                     }
                 }
             }
-        } catch { 
-            Write-Host "  - Access denied or menu empty for $location" -ForegroundColor Gray
-        }
+        } catch { }
     }
 }
 
-# 3. Final Export
+# 4. Final Export
 if ($results.Count -gt 0) {
     $results | Export-Csv -Path $exportPath -NoTypeInformation -Encoding utf8 -Force
-    Write-Host "`nDONE! Unique links captured: $($results.Count)" -ForegroundColor Green
-    Write-Host "File saved to: $exportPath" -ForegroundColor Green
+    Write-Host "`nDONE! Captured: $($results.Count) unique links." -ForegroundColor Green
     Invoke-Item "C:\Temp"
-} else {
-    Write-Warning "No unique links were found. Ensure you have permissions on the sites."
 }
 
 Disconnect-PnPOnline -Connection $adminConn
